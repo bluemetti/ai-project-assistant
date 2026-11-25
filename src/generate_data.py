@@ -12,7 +12,6 @@ SKILLS = [
 
 N_PEOPLE = 12
 N_PROJECTS = 10
-N_PROJECTS = 10
 TASKS_PER_PROJECT = 50
 N_TASKS = N_PROJECTS * TASKS_PER_PROJECT
 PHASES = ["design", "procurement", "testing", "delivery"]
@@ -40,6 +39,11 @@ def generate_tasks(team):
     planned_start = base_date + pd.to_timedelta(start_offsets, unit="D")
     planned_end = planned_start + pd.to_timedelta(durations, unit="D")
 
+    complexity = rng.integers(1, 6, size=N_TASKS)
+    n_dependencies = rng.integers(0, 5, size=N_TASKS)
+    required_skill = rng.choice(SKILLS, size=N_TASKS)
+    required_level = rng.integers(2, 6, size=N_TASKS)
+
     df = pd.DataFrame({
         "project": projects,
         "task": tasks,
@@ -48,14 +52,47 @@ def generate_tasks(team):
         "planned_start": planned_start,
         "planned_end": planned_end,
         "planned_duration": durations,
+        "complexity": complexity,
+        "n_dependencies": n_dependencies,
+        "required_skill": required_skill,
+        "required_level": required_level,
     })
     return df
     
+def generate_dependencies(tasks):
+    rows = []
+    for project, group in tasks.groupby("project"):
+        for _, task in group.iterrows():
+            candidates = group[group["planned_end"] <= task["planned_start"]]
+            if len(candidates) == 0:
+                continue
+            n_deps = min(len(candidates), rng.integers(0, 3))
+            chosen = rng.choice(candidates["task"].to_numpy(), size=n_deps, replace=False)
+            for pred in chosen:
+                rows.append({"task": task["task"], "depends_on": pred})
+    return pd.DataFrame(rows, columns=["task", "depends_on"])
+
+def add_skill_gap(tasks, team):
+    levels = team.melt(
+        id_vars="person", var_name="required_skill", value_name="owner_level"
+    ).rename(columns={"person": "owner"})
+
+    df = tasks.merge(levels, on=["owner", "required_skill"], how="left")
+
+    df["skill_gap"] = df["required_level"] - df["owner_level"]
+    df["skill_gap"] = df["skill_gap"].clip(lower=0)
+
+
+    return df
 
 if __name__ == "__main__":
     team = generate_team()
     team.to_csv("data/team.csv", index=False)
     tasks = generate_tasks(team)
     tasks.to_csv("data/tasks.csv", index=False)
-    print((tasks["planned_end"] > tasks["planned_start"]).all())
-    print(tasks.head(10))
+    deps = generate_dependencies(tasks)
+    deps.to_csv("data/dependencies.csv", index=False)
+    check = add_skill_gap(tasks, team)
+    print(len(check))
+    print(check[["task", "owner", "required_skill", "required_level", "owner_level", "skill_gap"]].head(10))
+    print(check["skill_gap"].value_counts().sort_index())
